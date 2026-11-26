@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>IPTV Player — Favoritos y Listas Gratis</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #111; color: #f5f5f5; }
+    header { padding: 14px; background: #1c1c1e; border-bottom: 1px solid #2c2c2e; }
+    h1 { margin: 0 0 10px; font-size: 1.1rem; }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px; }
+    input[type="text"] { flex: 1; min-width: 200px; padding: 8px 10px; border-radius: 6px; border: 1px solid #3a3a3c; background: #2c2c2e; color: #fff; }
+    button, .file-label { padding: 8px 12px; border-radius: 6px; border: none; background: #0a84ff; color: #fff; font-size: 0.9rem; cursor: pointer; }
+    button.secondary { background: #2c2c2e; border: 1px solid #3a3a3c; }
+    button.active { background: #30d158; color: #000; font-weight: 600; }
+    input[type="file"] { display: none; }
+    video { width: 100%; max-height: 240px; background: #000; display: block; }
+    .tabs { display: flex; gap: 8px; padding: 10px 14px; background: #18181a; }
+    .list { padding: 8px 14px 40px; display: flex; flex-direction: column; gap: 8px; }
+    .channel { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; background: #1c1c1e; border-radius: 8px; }
+    .channel-name { flex: 1; cursor: pointer; }
+    .fav-btn { background: transparent; border: none; color: #ffd60a; font-size: 1.2rem; padding: 4px 8px; }
+    .status { padding: 6px 14px; font-size: 0.8rem; color: #a1a1a6; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Mi IPTV Player</h1>
+    <div class="controls">
+      <input id="m3uUrl" type="text" placeholder="Pega URL de lista .m3u / .m3u8..." />
+      <button id="loadUrlBtn">Cargar URL</button>
+      <label class="file-label" for="m3uFile">Subir .m3u</label>
+      <input id="m3uFile" type="file" accept=".m3u,.m3u8,text/plain" />
+    </div>
+  </header>
+
+  <video id="video" controls playsinline></video>
+  <div class="status" id="status">Listo. Carga una lista por URL o sube un archivo .m3u.</div>
+
+  <div class="tabs">
+    <button id="tabAll" class="secondary active">Todos</button>
+    <button id="tabFavs" class="secondary">Favoritos</button>
+  </div>
+
+  <div class="list" id="channelList"></div>
+
+  <script>
+    const FAV_KEY = 'iptv_fav_urls_v1';
+    const M3U_CACHE_KEY = 'iptv_cached_m3u_v1';
+    const M3U_URL_KEY = 'iptv_saved_url_v1';
+
+    let channels = [];
+    let favorites = JSON.parse(localStorage.getItem(FAV_KEY) || '[]');
+    let onlyFavorites = false;
+    let hlsInstance = null;
+
+    const videoEl = document.getElementById('video');
+    const listEl = document.getElementById('channelList');
+    const statusEl = document.getElementById('status');
+    const urlInput = document.getElementById('m3uUrl');
+
+    function setStatus(msg) {
+      statusEl.textContent = msg;
+    }
+
+    function saveFavorites() {
+      localStorage.setItem(FAV_KEY, JSON.stringify(favorites));
+    }
+
+    function toggleFavorite(url) {
+      const idx = favorites.indexOf(url);
+      if (idx > -1) favorites.splice(idx, 1);
+      else favorites.push(url);
+      saveFavorites();
+      renderChannels();
+    }
+
+    function parseM3U(content) {
+      const lines = content.split(/\r?\n/);
+      const parsed = [];
+      let currentName = '';
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+        if (line.startsWith('#EXTINF:')) {
+          const commaIdx = line.lastIndexOf(',');
+          currentName = commaIdx > -1 ? line.slice(commaIdx + 1).trim() : 'Canal sin nombre';
+        } else if (!line.startsWith('#')) {
+          parsed.push({
+            name: currentName || 'Canal sin nombre',
+            url: line
+          });
+          currentName = '';
+        }
+      }
+      return parsed;
+    }
+
+    function playChannel(channel) {
+      setStatus(`Reproduciendo: ${channel.name}`);
+      if (hlsInstance) {
+        hlsInstance.destroy();
+        hlsInstance = null;
+      }
+
+      if (channel.url.includes('.m3u8') && window.Hls && window.Hls.isSupported()) {
+        hlsInstance = new window.Hls();
+        hlsInstance.loadSource(channel.url);
+        hlsInstance.attachMedia(videoEl);
+        hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, () => videoEl.play().catch(() => {}));
+      } else {
+        videoEl.src = channel.url;
+        videoEl.play().catch(() => {});
+      }
+    }
+
+    function renderChannels() {
+      const visible = onlyFavorites
+        ? channels.filter((ch) => favorites.includes(ch.url))
+        : channels;
+
+      listEl.innerHTML = '';
+      if (!visible.length) {
+        listEl.innerHTML = `<div class="status">${onlyFavorites ? 'Aún no tienes canales favoritos.' : 'No hay canales cargados.'}</div>`;
+        return;
+      }
+
+      visible.forEach((ch) => {
+        const isFav = favorites.includes(ch.url);
+        const row = document.createElement('div');
+        row.className = 'channel';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'channel-name';
+        nameSpan.textContent = ch.name;
+        nameSpan.onclick = () => playChannel(ch);
+
+        const favBtn = document.createElement('button');
+        favBtn.className = 'fav-btn';
+        favBtn.title = 'Favorito';
+        favBtn.textContent = isFav ? '★' : '☆';
+        favBtn.onclick = (e) => {
+          e.stopPropagation();
+          toggleFavorite(ch.url);
+        };
+
+        row.appendChild(nameSpan);
+        row.appendChild(favBtn);
+        listEl.appendChild(row);
+      });
+    }
+
+    async function loadFromUrl(url) {
+      if (!url) return setStatus('Introduce una URL válida.');
+      setStatus('Descargando lista...');
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();
+        localStorage.setItem(M3U_URL_KEY, url);
+        localStorage.setItem(M3U_CACHE_KEY, text);
+        channels = parseM3U(text);
+        setStatus(`Cargados ${channels.length} canales.`);
+        renderChannels();
+      } catch (err) {
+        setStatus(`No se pudo cargar la URL (${err.message}). Revisa CORS o el enlace.`);
+      }
+    }
+
+    document.getElementById('loadUrlBtn').onclick = () => loadFromUrl(urlInput.value.trim());
+
+    document.getElementById('m3uFile').onchange = (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = String(reader.result || '');
+        localStorage.setItem(M3U_CACHE_KEY, text);
+        channels = parseM3U(text);
+        setStatus(`Archivo "${file.name}" cargado (${channels.length} canales).`);
+        renderChannels();
+      };
+      reader.readAsText(file);
+    };
+
+    document.getElementById('tabAll').onclick = () => {
+      onlyFavorites = false;
+      document.getElementById('tabAll').classList.add('active');
+      document.getElementById('tabFavs').classList.remove('active');
+      renderChannels();
+    };
+
+    document.getElementById('tabFavs').onclick = () => {
+      onlyFavorites = true;
+      document.getElementById('tabFavs').classList.add('active');
+      document.getElementById('tabAll').classList.remove('active');
+      renderChannels();
+    };
+
+    // Restaurar caché al abrir
+    const savedUrl = localStorage.getItem(M3U_URL_KEY);
+    if (savedUrl) urlInput.value = savedUrl;
+    const cachedM3U = localStorage.getItem(M3U_CACHE_KEY);
+    if (cachedM3U) {
+      channels = parseM3U(cachedM3U);
+      setStatus(`Lista restaurada (${channels.length} canales).`);
+    }
+    renderChannels();
+  </script>
+</body>
+</html>
