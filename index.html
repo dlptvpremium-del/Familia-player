@@ -104,7 +104,7 @@
     <input
       id="fileInput"
       type="file"
-      accept=".m3u,.m3u8,audio/x-mpegurl,application/vnd.apple.mpegurl,.txt,text/plain"
+      accept=".m3u,.m3u8,audio/x-mpegurl,application/vnd.apple.mpegurl,.txt,text/plain,*/*"
     />
   </div>
 
@@ -125,4 +125,239 @@
     const urlInput = document.getElementById("urlInput");
     const loadUrlBtn = document.getElementById("loadUrlBtn");
     const fileInput = document.getElementById("fileInput");
-    const videoPlayer = document.getElementBy
+    const videoPlayer = document.getElementById("videoPlayer");
+    const nowPlaying = document.getElementById("nowPlaying");
+    const errorMsg = document.getElementById("errorMsg");
+    const tabAll = document.getElementById("tabAll");
+    const tabFavs = document.getElementById("tabFavs");
+    const channelListEl = document.getElementById("channelList");
+
+    let channels = [];
+    let favorites = new Set(loadFavorites());
+    let activeTab = "all";
+    let hlsInstance = null;
+
+    function loadFavorites() {
+      try {
+        const raw = localStorage.getItem(STORAGE_FAVS_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function saveFavorites() {
+      try {
+        localStorage.setItem(STORAGE_FAVS_KEY, JSON.stringify([...favorites]));
+      } catch {
+        errorMsg.textContent = "No se pudieron guardar los favoritos en el navegador.";
+      }
+    }
+
+    function getChannelKey(channel) {
+      return `${channel.name}::${channel.url}`;
+    }
+
+    function parseM3U(content) {
+      const cleanContent = content.replace(/^\uFEFF/, "");
+      const lines = cleanContent.split(/\r?\n/);
+      const parsed = [];
+      let pendingName = null;
+
+      for (const rawLine of lines) {
+        const line = rawLine.trim();
+        if (!line) continue;
+
+        if (line.startsWith("#EXTINF")) {
+          const commaIndex = line.indexOf(",");
+          const title = commaIndex !== -1 ? line.slice(commaIndex + 1).trim() : "";
+          pendingName = title || "Canal sin nombre";
+          continue;
+        }
+
+        if (!line.startsWith("#")) {
+          parsed.push({
+            name: pendingName || "Canal sin nombre",
+            url: line
+          });
+          pendingName = null;
+        }
+      }
+
+      return parsed;
+    }
+
+    function readFileAsText(file) {
+      if (typeof file.text === "function") {
+        return file.text();
+      }
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(reader.error || new Error("Error leyendo archivo"));
+        reader.readAsText(file);
+      });
+    }
+
+    function renderChannels() {
+      const visibleChannels =
+        activeTab === "favs"
+          ? channels.filter((ch) => favorites.has(getChannelKey(ch)))
+          : channels;
+
+      channelListEl.innerHTML = "";
+
+      if (visibleChannels.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "status";
+        empty.textContent =
+          activeTab === "favs"
+            ? "Aún no tienes canales en Favoritos."
+            : "No hay canales cargados.";
+        channelListEl.appendChild(empty);
+        return;
+      }
+
+      visibleChannels.forEach((channel) => {
+        const key = getChannelKey(channel);
+        const isFav = favorites.has(key);
+
+        const item = document.createElement("div");
+        item.className = "channel-item";
+
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "channel-name";
+        nameSpan.textContent = channel.name;
+        nameSpan.addEventListener("click", () => playChannel(channel));
+
+        const favBtn = document.createElement("button");
+        favBtn.type = "button";
+        favBtn.className = "fav-btn";
+        favBtn.setAttribute("aria-label", isFav ? "Quitar de favoritos" : "Añadir a favoritos");
+        favBtn.textContent = isFav ? "★" : "☆";
+        favBtn.addEventListener("click", (event) => {
+          event.stopPropagation();
+          if (favorites.has(key)) {
+            favorites.delete(key);
+          } else {
+            favorites.add(key);
+          }
+          saveFavorites();
+          renderChannels();
+        });
+
+        item.appendChild(nameSpan);
+        item.appendChild(favBtn);
+        channelListEl.appendChild(item);
+      });
+    }
+
+    function destroyHls() {
+      if (hlsInstance) {
+        hlsInstance.destroy();
+        hlsInstance = null;
+      }
+    }
+
+    function playChannel(channel) {
+      errorMsg.textContent = "";
+      nowPlaying.textContent = `Reproduciendo: ${channel.name}`;
+
+      if (window.location.protocol === "https:" && channel.url.startsWith("http://")) {
+        errorMsg.textContent =
+          "Este canal usa http:// dentro de una web https:// y el navegador lo bloquea por contenido mixto.";
+        return;
+      }
+
+      destroyHls();
+      const isHls = channel.url.toLowerCase().includes(".m3u8");
+
+      if (isHls && window.Hls && window.Hls.isSupported()) {
+        hlsInstance = new window.Hls();
+        hlsInstance.loadSource(channel.url);
+        hlsInstance.attachMedia(videoPlayer);
+        hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, () => {
+          videoPlayer.play().catch(() => {
+            errorMsg.textContent = "Pulsa reproducir en el reproductor para iniciar el flujo.";
+          });
+        });
+        hlsInstance.on(window.Hls.Events.ERROR, (_, data) => {
+          if (data.fatal) {
+            errorMsg.textContent = "No se pudo reproducir el flujo HLS.";
+          }
+        });
+      } else {
+        videoPlayer.src = channel.url;
+        videoPlayer.load();
+        videoPlayer.play().catch(() => {
+          errorMsg.textContent =
+            "No se pudo iniciar la reproducción en este navegador o el enlace no es compatible.";
+        });
+      }
+    }
+
+    async function handleSelectedFile(file) {
+      if (!file) return;
+      errorMsg.textContent = "";
+      try {
+        const text = await readFileAsText(file);
+        channels = parseM3U(text);
+        renderChannels();
+        if (channels.length === 0) {
+          errorMsg.textContent =
+            `Archivo "${file.name}" leído (${text.length} caracteres), pero no se detectaron canales válidos.`;
+        }
+      } catch (err) {
+        errorMsg.textContent =
+          `No se pudo leer "${file.name}": ${err && err.message ? err.message : "error de lectura"}`;
+      }
+    }
+
+    fileInput.addEventListener("change", async (event) => {
+      const file = event.target.files?.[0];
+      await handleSelectedFile(file);
+    });
+
+    fileInput.addEventListener("input", async (event) => {
+      const file = event.target.files?.[0];
+      if (file && channels.length === 0) {
+        await handleSelectedFile(file);
+      }
+    });
+
+    loadUrlBtn.addEventListener("click", async () => {
+      const listUrl = urlInput.value.trim();
+      if (!listUrl) return;
+
+      errorMsg.textContent = "";
+      try {
+        const res = await fetch(listUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const text = await res.text();
+        channels = parseM3U(text);
+        renderChannels();
+      } catch {
+        errorMsg.textContent =
+          "No se pudo cargar la lista desde la URL (revisa CORS, HTTPS o si el enlace es válido).";
+      }
+    });
+
+    tabAll.addEventListener("click", () => {
+      activeTab = "all";
+      tabAll.className = "active-tab";
+      tabFavs.className = "secondary";
+      renderChannels();
+    });
+
+    tabFavs.addEventListener("click", () => {
+      activeTab = "favs";
+      tabFavs.className = "active-tab";
+      tabAll.className = "secondary";
+      renderChannels();
+    });
+
+    renderChannels();
+  </script>
+</body>
+</html>
