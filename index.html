@@ -22,6 +22,7 @@
       gap: 8px;
       margin-bottom: 12px;
       flex-wrap: wrap;
+      align-items: center;
     }
     input[type="text"] {
       flex: 1;
@@ -32,7 +33,8 @@
       background: #1e1e1e;
       color: #fff;
     }
-    button {
+    button,
+    label.btn {
       padding: 10px 14px;
       border: none;
       border-radius: 8px;
@@ -40,6 +42,7 @@
       color: #fff;
       font-weight: 600;
       cursor: pointer;
+      display: inline-block;
     }
     button.secondary {
       background: #2a2a2a;
@@ -75,48 +78,4 @@
       background: #1e1e1e;
       cursor: pointer;
     }
-    .channel-name {
-      flex: 1;
-      padding-right: 10px;
-    }
-    .fav-btn {
-      background: transparent;
-      color: #ffd54f;
-      font-size: 1.25rem;
-      padding: 4px 8px;
-    }
-  </style>
-</head>
-<body>
-  <h1>Mi IPTV Player</h1>
-
-  <div class="row">
-    <input id="urlInput" type="text" placeholder="Pega URL de lista .m3u / .m3u8..." />
-    <button id="loadUrlBtn" type="button">Cargar URL</button>
-  </div>
-
-  <div class="row">
-    <button id="uploadBtn" type="button">Subir .m3u</button>
-    <input id="fileInput" type="file" accept=".m3u,.m3u8,audio/x-mpegurl,application/vnd.apple.mpegurl,.txt" hidden />
-  </div>
-
-  <video id="videoPlayer" controls playsinline></video>
-  <div id="nowPlaying" class="status">Reproduciendo: Ningún canal</div>
-  <div id="errorMsg" class="status" style="color:#ff8a80;"></div>
-
-  <div class="row">
-    <button id="tabAll" class="active-tab" type="button">Todos</button>
-    <button id="tabFavs" class="secondary" type="button">Favoritos</button>
-  </div>
-
-  <div id="channelList" class="channel-list"></div>
-
-  <script>
-    const STORAGE_FAVS_KEY = "mi_iptv_favoritos_v1";
-
-    const urlInput = document.getElementById("urlInput");
-    const loadUrlBtn = document.getElementById("loadUrlBtn");
-    const uploadBtn = document.getElementById("uploadBtn");
-    const fileInput = document.getElementById("fileInput");
-    const videoPlayer = document.getElementById("videoPlayer");
-    const nowPlaying
+    .channel
