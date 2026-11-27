@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#121212" />
   <title>Mi IPTV Player</title>
+  <link rel="manifest" href="manifest.json" />
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
   <style>
     body {
@@ -17,16 +19,33 @@
       margin-top: 0;
       font-size: 1.5rem;
     }
+    .panel {
+      background: #181818;
+      border: 1px solid #282828;
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .panel-title {
+      font-size: 0.9rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: #ddd;
+    }
     .row {
       display: flex;
       gap: 8px;
-      margin-bottom: 12px;
+      margin-bottom: 8px;
       flex-wrap: wrap;
       align-items: center;
     }
-    input[type="text"] {
+    .row:last-child {
+      margin-bottom: 0;
+    }
+    input[type="text"],
+    input[type="password"] {
       flex: 1;
-      min-width: 200px;
+      min-width: 140px;
       padding: 10px 12px;
       border-radius: 8px;
       border: 1px solid #333;
@@ -64,7 +83,7 @@
     .status {
       font-size: 0.9rem;
       color: #bbb;
-      margin-bottom: 12px;
+      margin-bottom: 8px;
     }
     .channel-list {
       display: flex;
@@ -95,17 +114,29 @@
 <body>
   <h1>Mi IPTV Player</h1>
 
-  <div class="row">
-    <input id="urlInput" type="text" placeholder="Pega URL de lista .m3u / .m3u8..." />
-    <button id="loadUrlBtn" type="button">Cargar URL</button>
+  <div class="panel">
+    <div class="panel-title">Lista M3U / M3U8 (URL o archivo local)</div>
+    <div class="row">
+      <input id="urlInput" type="text" placeholder="Pega URL (http:// o https://raw.githubusercontent.com/...)" />
+      <button id="loadUrlBtn" type="button">Cargar URL</button>
+    </div>
+    <div class="row">
+      <input
+        id="fileInput"
+        type="file"
+        accept=".m3u,.m3u8,audio/x-mpegurl,application/vnd.apple.mpegurl,.txt,text/plain,*/*"
+      />
+    </div>
   </div>
 
-  <div class="row">
-    <input
-      id="fileInput"
-      type="file"
-      accept=".m3u,.m3u8,audio/x-mpegurl,application/vnd.apple.mpegurl,.txt,text/plain,*/*"
-    />
+  <div class="panel">
+    <div class="panel-title">Xtream Codes</div>
+    <div class="row">
+      <input id="xtreamHost" type="text" placeholder="Servidor (ej: http://servidor:8080)" />
+      <input id="xtreamUser" type="text" placeholder="Usuario" />
+      <input id="xtreamPass" type="password" placeholder="Contraseña" />
+      <button id="xtreamConnectBtn" type="button">Conectar</button>
+    </div>
   </div>
 
   <video id="videoPlayer" controls playsinline></video>
@@ -120,11 +151,16 @@
   <div id="channelList" class="channel-list"></div>
 
   <script>
-    const STORAGE_FAVS_KEY = "mi_iptv_favoritos_v1";
+    const STORAGE_FAVS_KEY = "mi_iptv_favoritos_v2";
+    const STORAGE_XTREAM_KEY = "mi_iptv_xtream_v1";
 
     const urlInput = document.getElementById("urlInput");
     const loadUrlBtn = document.getElementById("loadUrlBtn");
     const fileInput = document.getElementById("fileInput");
+    const xtreamHost = document.getElementById("xtreamHost");
+    const xtreamUser = document.getElementById("xtreamUser");
+    const xtreamPass = document.getElementById("xtreamPass");
+    const xtreamConnectBtn = document.getElementById("xtreamConnectBtn");
     const videoPlayer = document.getElementById("videoPlayer");
     const nowPlaying = document.getElementById("nowPlaying");
     const errorMsg = document.getElementById("errorMsg");
@@ -133,30 +169,55 @@
     const channelListEl = document.getElementById("channelList");
 
     let channels = [];
-    let favorites = new Set(loadFavorites());
+    let favoritesMap = loadFavoritesMap();
     let activeTab = "all";
     let hlsInstance = null;
 
-    function loadFavorites() {
+    function getChannelKey(channel) {
+      return channel.url.trim();
+    }
+
+    function loadFavoritesMap() {
       try {
         const raw = localStorage.getItem(STORAGE_FAVS_KEY);
         const parsed = raw ? JSON.parse(raw) : [];
-        return Array.isArray(parsed) ? parsed : [];
+        const map = new Map();
+        if (Array.isArray(parsed)) {
+          parsed.forEach((ch) => {
+            if (ch && ch.url) {
+              map.set(getChannelKey(ch), { name: ch.name || "Canal sin nombre", url: ch.url });
+            }
+          });
+        }
+        return map;
       } catch {
-        return [];
+        return new Map();
       }
     }
 
-    function saveFavorites() {
+    function saveFavoritesMap() {
       try {
-        localStorage.setItem(STORAGE_FAVS_KEY, JSON.stringify([...favorites]));
+        localStorage.setItem(STORAGE_FAVS_KEY, JSON.stringify([...favoritesMap.values()]));
       } catch {
         errorMsg.textContent = "No se pudieron guardar los favoritos en el navegador.";
       }
     }
 
-    function getChannelKey(channel) {
-      return `${channel.name}::${channel.url}`;
+    function loadXtreamProfile() {
+      try {
+        const raw = localStorage.getItem(STORAGE_XTREAM_KEY);
+        if (!raw) return;
+        const p = JSON.parse(raw);
+        if (p.host) xtreamHost.value = p.host;
+        if (p.user) xtreamUser.value = p.user;
+        if (p.pass) xtreamPass.value = p.pass;
+      } catch {}
+    }
+
+    function saveXtreamProfile(host, user, pass) {
+      try {
+        localStorage.setItem(STORAGE_XTREAM_KEY, JSON.stringify({ host, user, pass }));
+      } catch {}
     }
 
     function parseM3U(content) {
@@ -200,10 +261,26 @@
       });
     }
 
+    async function fetchTextWithFallback(targetUrl) {
+      try {
+        const directRes = await fetch(targetUrl);
+        if (directRes.ok) {
+          return await directRes.text();
+        }
+      } catch {}
+
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+      const proxyRes = await fetch(proxyUrl);
+      if (!proxyRes.ok) {
+        throw new Error(`HTTP ${proxyRes.status}`);
+      }
+      return await proxyRes.text();
+    }
+
     function renderChannels() {
       const visibleChannels =
         activeTab === "favs"
-          ? channels.filter((ch) => favorites.has(getChannelKey(ch)))
+          ? [...favoritesMap.values()]
           : channels;
 
       channelListEl.innerHTML = "";
@@ -221,7 +298,7 @@
 
       visibleChannels.forEach((channel) => {
         const key = getChannelKey(channel);
-        const isFav = favorites.has(key);
+        const isFav = favoritesMap.has(key);
 
         const item = document.createElement("div");
         item.className = "channel-item";
@@ -238,12 +315,12 @@
         favBtn.textContent = isFav ? "★" : "☆";
         favBtn.addEventListener("click", (event) => {
           event.stopPropagation();
-          if (favorites.has(key)) {
-            favorites.delete(key);
+          if (favoritesMap.has(key)) {
+            favoritesMap.delete(key);
           } else {
-            favorites.add(key);
+            favoritesMap.set(key, { name: channel.name, url: channel.url });
           }
-          saveFavorites();
+          saveFavoritesMap();
           renderChannels();
         });
 
@@ -266,7 +343,7 @@
 
       if (window.location.protocol === "https:" && channel.url.startsWith("http://")) {
         errorMsg.textContent =
-          "Este canal usa http:// dentro de una web https:// y el navegador lo bloquea por contenido mixto.";
+          "Este stream usa http:// dentro de una web https:// y el navegador lo bloquea por contenido mixto.";
         return;
       }
 
@@ -303,6 +380,9 @@
       try {
         const text = await readFileAsText(file);
         channels = parseM3U(text);
+        activeTab = "all";
+        tabAll.className = "active-tab";
+        tabFavs.className = "secondary";
         renderChannels();
         if (channels.length === 0) {
           errorMsg.textContent =
@@ -332,14 +412,64 @@
 
       errorMsg.textContent = "";
       try {
-        const res = await fetch(listUrl);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const text = await res.text();
+        const text = await fetchTextWithFallback(listUrl);
         channels = parseM3U(text);
+        activeTab = "all";
+        tabAll.className = "active-tab";
+        tabFavs.className = "secondary";
         renderChannels();
+        if (channels.length === 0) {
+          errorMsg.textContent = "Se descargó el enlace, pero no se encontraron canales M3U válidos.";
+        }
       } catch {
         errorMsg.textContent =
-          "No se pudo cargar la lista desde la URL (revisa CORS, HTTPS o si el enlace es válido).";
+          "No se pudo cargar la lista desde la URL (revisa el enlace, CORS o si está caído).";
+      }
+    });
+
+    xtreamConnectBtn.addEventListener("click", async () => {
+      const rawHost = xtreamHost.value.trim().replace(/\/+$/, "");
+      const user = xtreamUser.value.trim();
+      const pass = xtreamPass.value.trim();
+
+      if (!rawHost || !user || !pass) {
+        errorMsg.textContent = "Completa servidor, usuario y contraseña de Xtream Codes.";
+        return;
+      }
+
+      errorMsg.textContent = "";
+      saveXtreamProfile(rawHost, user, pass);
+
+      const apiUrl =
+        `${rawHost}/player_api.php?username=${encodeURIComponent(user)}&password=${encodeURIComponent(pass)}&action=get_live_streams`;
+
+      try {
+        const rawJson = await fetchTextWithFallback(apiUrl);
+        const data = JSON.parse(rawJson);
+
+        if (!Array.isArray(data)) {
+          errorMsg.textContent = "Respuesta inesperada del servidor Xtream (revisa credenciales o servidor).";
+          return;
+        }
+
+        channels = data
+          .filter((item) => item && item.stream_id)
+          .map((item) => ({
+            name: item.name || `Canal ${item.stream_id}`,
+            url: `${rawHost}/live/${encodeURIComponent(user)}/${encodeURIComponent(pass)}/${item.stream_id}.m3u8`
+          }));
+
+        activeTab = "all";
+        tabAll.className = "active-tab";
+        tabFavs.className = "secondary";
+        renderChannels();
+
+        if (channels.length === 0) {
+          errorMsg.textContent = "Conectado a Xtream, pero no se devolvieron canales en vivo.";
+        }
+      } catch {
+        errorMsg.textContent =
+          "No se pudo conectar a Xtream Codes (revisa servidor, credenciales, HTTPS o bloqueo de red).";
       }
     });
 
@@ -357,6 +487,13 @@
       renderChannels();
     });
 
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("service-worker.js").catch(() => {});
+      });
+    }
+
+    loadXtreamProfile();
     renderChannels();
   </script>
 </body>
